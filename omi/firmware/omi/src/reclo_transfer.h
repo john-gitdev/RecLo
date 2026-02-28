@@ -79,7 +79,7 @@
 /** Payload of a CHUNK_HEADER packet (13 bytes). */
 typedef struct __attribute__((packed)) {
     uint32_t data_size;    /* total Opus data bytes                  */
-    uint8_t  codec_id;     /* 20 = Opus                              */
+    uint8_t  codec_id;     /* 21 = Opus                              */
     uint32_t sample_rate;  /* Hz, always 16000                       */
     uint32_t crc32;        /* CRC-32 of the Opus data                */
 } RecloChunkMeta;

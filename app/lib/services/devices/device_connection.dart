@@ -240,6 +240,7 @@ abstract class DeviceConnection {
   Future<StreamSubscription<List<int>>?> getBleBatteryLevelListener({void Function(int)? onBatteryLevelChange}) async => await performGetBleBatteryLevelListener(onBatteryLevelChange: onBatteryLevelChange);
   Future<StreamSubscription<List<int>>?> performGetBleBatteryLevelListener({void Function(int)? onBatteryLevelChange});
 
+  Future<int> getFeatures() async => 0;
   Future<int> getLedDimRatio() async => 50;
   Future<int> getMicGain() async => 50;
   Future<void> setLedDimRatio(int r) async {}

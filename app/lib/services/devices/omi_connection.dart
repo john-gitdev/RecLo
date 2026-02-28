@@ -91,6 +91,38 @@ class OmiDeviceConnection extends DeviceConnection {
   }
 
   @override
+  Future<int> getFeatures() async {
+    int features = 0;
+    try {
+      final dimData = await transport.readCharacteristic(settingsServiceUuid, settingsDimRatioCharacteristicUuid);
+      if (dimData.isNotEmpty) features |= OmiFeatures.ledDimming;
+    } catch (_) {}
+    try {
+      final gainData = await transport.readCharacteristic(settingsServiceUuid, settingsMicGainCharacteristicUuid);
+      if (gainData.isNotEmpty) features |= OmiFeatures.micGain;
+    } catch (_) {}
+    return features;
+  }
+
+  @override
+  Future<int> getLedDimRatio() async {
+    try {
+      final data = await transport.readCharacteristic(settingsServiceUuid, settingsDimRatioCharacteristicUuid);
+      if (data.isNotEmpty) return data[0];
+    } catch (_) {}
+    return 50;
+  }
+
+  @override
+  Future<int> getMicGain() async {
+    try {
+      final data = await transport.readCharacteristic(settingsServiceUuid, settingsMicGainCharacteristicUuid);
+      if (data.isNotEmpty) return data[0];
+    } catch (_) {}
+    return 50;
+  }
+
+  @override
   Future<void> setLedDimRatio(int ratio) async {
     try {
       await transport.writeCharacteristic(

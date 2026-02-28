@@ -300,12 +300,6 @@ int main(void)
         return transportErr;
     }
 
-    // RecLo transfer service (BLE chunk upload)
-    ret = reclo_transfer_init();
-    if (ret) {
-        LOG_ERR("RecLo transfer init failed (err %d)", ret);
-    }
-
     // Initialize codec
     LOG_INF("Initializing codec...\n");
 
@@ -316,14 +310,19 @@ int main(void)
         return ret;
     }
 
-    // RecLo recorder — takes over the codec callback for offline recording
-    ret = reclo_recorder_init();
+    // RecLo transfer service (BLE chunk upload) + recorder
+    ret = reclo_transfer_init();
     if (ret) {
-        LOG_ERR("RecLo recorder init failed (err %d)", ret);
+        LOG_ERR("RecLo transfer init failed (err %d) — skipping recorder", ret);
     } else {
-        reclo_recorder_start();
-        LOG_INF("RecLo recorder started — %d chunk(s) on SD card",
-                reclo_recorder_chunk_count());
+        ret = reclo_recorder_init();
+        if (ret) {
+            LOG_ERR("RecLo recorder init failed (err %d)", ret);
+        } else {
+            reclo_recorder_start();
+            LOG_INF("RecLo recorder started — %d chunk(s) on SD card",
+                    reclo_recorder_chunk_count());
+        }
     }
 
     // Initialize microphone

@@ -119,6 +119,7 @@ class ChunkUploadService {
 
   bool _opusReady = false;
   SimpleOpusDecoder? _opusDecoder;
+  int _batchReceivedCount = 0;
 
   ChunkUploadService({
     required DeviceTransport transport,
@@ -135,6 +136,7 @@ class ChunkUploadService {
     await _loadPendingTail();   // carry over open tail from last session
     _completedChunks.clear();
     _current = null;
+    _batchReceivedCount = 0;
 
     _dataSub = _transport
         .getCharacteristicStream(recloTransferServiceUuid, recloDataCharUuid)
@@ -273,6 +275,7 @@ class ChunkUploadService {
   // ─── Chunk finalization ───────────────────────────────────────────────────
 
   Future<void> _finalizeChunk(_IncomingChunk incoming) async {
+    _batchReceivedCount++;
     final opusBytes = Uint8List.fromList(incoming.buffer);
     final pcmBytes  = _decodeOpusFrames(opusBytes);
 
@@ -316,17 +319,43 @@ class ChunkUploadService {
 
   // ─── Upload done ──────────────────────────────────────────────────────────
 
-  void _handleUploadDone() {
-    debugPrint('ChunkUploadService: upload done — '
-        '${_completedChunks.length} chunk(s) received');
+  Future<void> _handleUploadDone() async {
+    if (_batchReceivedCount == 0) {
+      debugPrint('ChunkUploadService: upload complete — '
+          '${_completedChunks.length} total chunk(s)');
+      _progressController.add(UploadProgress(
+        chunksReceived: _completedChunks.length,
+        totalChunks:    _completedChunks.length,
+        isComplete:     true,
+      ));
+      _processConversations();
+      return;
+    }
 
+    debugPrint('ChunkUploadService: batch of $_batchReceivedCount done, '
+        're-requesting upload');
     _progressController.add(UploadProgress(
       chunksReceived: _completedChunks.length,
       totalChunks:    _completedChunks.length,
-      isComplete:     true,
     ));
+    _batchReceivedCount = 0;
 
-    _processConversations();
+    try {
+      await _transport.writeCharacteristic(
+        recloTransferServiceUuid,
+        recloControlCharUuid,
+        [_kCmdRequestUpload],
+      );
+    } catch (e) {
+      debugPrint('ChunkUploadService: re-request failed: $e');
+      _progressController.add(UploadProgress(
+        chunksReceived: _completedChunks.length,
+        totalChunks:    _completedChunks.length,
+        isComplete:     true,
+        error:          'Re-request failed: $e',
+      ));
+      _processConversations();
+    }
   }
 
   // ─── Post-processing: group + stitch ─────────────────────────────────────

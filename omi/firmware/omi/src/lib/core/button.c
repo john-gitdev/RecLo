@@ -66,6 +66,10 @@ static bool     _muted       = false;
 
 /* ── FSM tick ────────────────────────────────────────────────────────────────*/
 
+/* Forward declaration so K_WORK_DELAYABLE_DEFINE can reference the handler */
+void check_button_level(struct k_work *work_item);
+K_WORK_DELAYABLE_DEFINE(button_work, check_button_level);
+
 void check_button_level(struct k_work *work_item)
 {
     ARG_UNUSED(work_item);
@@ -147,8 +151,6 @@ static void button_gpio_callback(const struct device *dev, struct gpio_callback 
 }
 
 /* ── Init ────────────────────────────────────────────────────────────────────*/
-
-K_WORK_DELAYABLE_DEFINE(button_work, check_button_level);
 
 static int button_regist_callback(void)
 {

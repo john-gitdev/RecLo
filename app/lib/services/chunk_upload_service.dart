@@ -409,7 +409,11 @@ class ChunkUploadService {
     // Stitch only the confirmed-closed groups.
     for (final group in closedGroups) {
       final speechChunks = group.where((c) => c.hasSpeech).toList();
-      if (speechChunks.isEmpty) continue;
+      if (speechChunks.isEmpty) {
+        // All-silence group — no stitch needed, but the WAVs are closed forever.
+        await _deleteChunkWavs(group);
+        continue;
+      }
 
       final conv = Conversation(
         id:        'conv_${speechChunks.first.startTime.millisecondsSinceEpoch}',
@@ -430,8 +434,24 @@ class ChunkUploadService {
             '${result.silenceRemoved.inSeconds}s silence removed)');
         conv.stitchedFilePath = result.outputPath;
         onConversationReady?.call(conv);
+        // Raw chunk WAVs are now redundant — the stitched file is the output.
+        await _deleteChunkWavs(group);
       } else {
         debugPrint('ChunkUploadService: stitch failed: ${result.error}');
+        // Keep WAVs on stitch failure — they are the only copy of this audio.
+      }
+    }
+  }
+
+  /// Delete the WAV files for a closed group of chunks.
+  /// Never called on pending tail chunks (those are still needed next session).
+  Future<void> _deleteChunkWavs(List<AudioChunk> chunks) async {
+    for (final chunk in chunks) {
+      try {
+        final f = File(chunk.filePath);
+        if (await f.exists()) await f.delete();
+      } catch (e) {
+        debugPrint('ChunkUploadService: could not delete ${chunk.filePath}: $e');
       }
     }
   }

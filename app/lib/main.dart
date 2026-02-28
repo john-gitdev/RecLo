@@ -71,10 +71,9 @@ class _RootScreen extends StatelessWidget {
     return HomeScreen(
       isConnected: provider.isConnected,
       isScanning: provider.isScanning,
-      isRecording: provider.isRecording,
+      isUploading: provider.isUploading,
       conversations: provider.conversations,
-      pendingChunks: provider.pendingChunks,
-      onFinalizePressed: () => provider.finalizeNow(),
+      uploadProgress: provider.uploadProgress,
       onConversationTapped: (conversation) =>
           _openConversation(context, conversation, provider.silenceThresholdDb),
       onScanPressed: () => _handleDeviceTap(context, provider),

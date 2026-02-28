@@ -110,6 +110,7 @@ class ChunkUploadService {
   final DeviceTransport _transport;
   final double silenceThresholdDb;
   final Duration conversationGapThreshold;
+  final void Function(Conversation conversation)? onConversationReady;
 
   final _silenceService = SilenceDetectionService();
   final _stitcher = AudioStitcher();
@@ -128,6 +129,7 @@ class ChunkUploadService {
     required DeviceTransport transport,
     this.silenceThresholdDb = -40.0,
     this.conversationGapThreshold = const Duration(minutes: 2),
+    this.onConversationReady,
   }) : _transport = transport;
 
   // ─── Lifecycle ──────────────────────────────────────────────────────────────
@@ -387,6 +389,8 @@ class ChunkUploadService {
             '→ ${result.outputPath} '
             '(${result.totalDuration.inSeconds}s speech, '
             '${result.silenceRemoved.inSeconds}s silence removed)');
+        conv.stitchedFilePath = result.outputPath;
+        onConversationReady?.call(conv);
       } else {
         debugPrint('ChunkUploadService: stitch failed: ${result.error}');
       }

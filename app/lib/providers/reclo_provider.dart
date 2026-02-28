@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:reclo/backend/schema/bt_device/bt_device.dart';
 import 'package:reclo/pages/settings_screen.dart';
 import 'package:reclo/services/audio_chunk_manager.dart';
+import 'package:reclo/services/chunk_upload_service.dart';
 import 'package:reclo/services/devices/device_connection.dart';
 import 'package:reclo/services/devices/models.dart';
 import 'package:reclo/services/devices/omi_connection.dart';
@@ -29,14 +30,13 @@ class RecLoProvider extends ChangeNotifier {
   String? _lastDeviceId;
 
   final List<Conversation> _conversations = [];
-  final List<AudioChunk> _pendingChunks = [];
+  UploadProgress? _uploadProgress;
 
   double _silenceThresholdDb = RecLoSettings.defaultDbThreshold;
   double _silenceGapMinutes = RecLoSettings.defaultSilenceGapMinutes;
 
-  late AudioChunkManager _chunkManager;
-
-  StreamSubscription? _audioSubscription;
+  ChunkUploadService? _uploadService;
+  StreamSubscription<UploadProgress>? _uploadProgressSubscription;
   StreamSubscription? _batterySubscription;
   StreamSubscription? _scanSubscription;
   Timer? _watchdogTimer;
@@ -52,10 +52,11 @@ class RecLoProvider extends ChangeNotifier {
   String? get connectedDeviceName => _connectedDevice?.name;
   int get batteryLevel => _batteryLevel;
   List<Conversation> get conversations => List.unmodifiable(_conversations);
-  List<AudioChunk> get pendingChunks => List.unmodifiable(_pendingChunks);
+  UploadProgress? get uploadProgress => _uploadProgress;
   double get silenceThresholdDb => _silenceThresholdDb;
   double get silenceGapMinutes => _silenceGapMinutes;
-  bool get isRecording => isConnected && _pendingChunks.isNotEmpty;
+  bool get isUploading =>
+      _uploadProgress != null && !(_uploadProgress?.isComplete ?? true);
   String? get lastDeviceId => _lastDeviceId;
 
   /// Exposed for DeviceSettingsScreen to call device-specific methods
@@ -70,27 +71,8 @@ class RecLoProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     _lastDeviceId = prefs.getString(_lastDeviceKey);
 
-    _initChunkManager();
     _startWatchdog();
     notifyListeners();
-  }
-
-  void _initChunkManager() {
-    _chunkManager = AudioChunkManager(
-      silenceThresholdDb: _silenceThresholdDb,
-      conversationGapThreshold: Duration(
-        seconds: (_silenceGapMinutes * 60).round(),
-      ),
-      onChunkCompleted: (chunk) {
-        _pendingChunks.add(chunk);
-        notifyListeners();
-      },
-      onConversationDetected: (conversation) {
-        _conversations.add(conversation);
-        _pendingChunks.removeWhere((c) => conversation.chunks.contains(c));
-        notifyListeners();
-      },
-    );
   }
 
   // ─── BLE Scanning ──────────────────────────────────────────────────────────
@@ -141,7 +123,7 @@ class RecLoProvider extends ChangeNotifier {
           id: device.remoteId.str,
           name: device.platformName.isNotEmpty
               ? device.platformName
-              : 'Omi Device',
+              : 'RecLo Device',
           type: DeviceType.omi,
           rssi: 0,
         ),
@@ -162,7 +144,7 @@ class RecLoProvider extends ChangeNotifier {
         id: device.remoteId.str,
         name: device.platformName.isNotEmpty
             ? device.platformName
-            : 'Omi Device',
+            : 'RecLo Device',
         type: DeviceType.omi,
         rssi: 0,
         firmwareRevision: info['firmwareRevision'],
@@ -176,15 +158,16 @@ class RecLoProvider extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_lastDeviceKey, _lastDeviceId!);
 
-      await _startAudioStream();
-      await _startBatteryMonitor();
-
-      // Request High Priority for Uncompressed Audio
+      // Request high connection priority for faster upload
       try {
-        await device.requestConnectionPriority(connectionPriorityRequest: ble.ConnectionPriority.high);
+        await device.requestConnectionPriority(
+            connectionPriorityRequest: ble.ConnectionPriority.high);
       } catch (e) {
         debugPrint('RecLoProvider: Priority request failed: $e');
       }
+
+      await _startBatteryMonitor();
+      await _startChunkUpload(transport);
 
       _setConnectionState(RecLoConnectionState.connected);
       return true;
@@ -197,16 +180,29 @@ class RecLoProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> _startAudioStream() async {
-    if (_deviceConnection == null) return;
+  /// Start the batch chunk upload from the device.
+  Future<void> _startChunkUpload(DeviceTransport transport) async {
+    await _uploadProgressSubscription?.cancel();
+    await _uploadService?.dispose();
 
-    final codec = await _deviceConnection!.getAudioCodec();
-    debugPrint('RecLoProvider: Active codec is $codec');
+    _uploadService = ChunkUploadService(
+      transport: transport,
+      silenceThresholdDb: _silenceThresholdDb,
+      conversationGapThreshold: Duration(
+        seconds: (_silenceGapMinutes * 60).round(),
+      ),
+      onConversationReady: (conversation) {
+        _conversations.add(conversation);
+        notifyListeners();
+      },
+    );
 
-    await _chunkManager.start(codec);
-    _audioSubscription = (await _deviceConnection!.getBleAudioBytesListener(
-      onAudioBytesReceived: (bytes) => _chunkManager.addAudioBytes(bytes),
-    )) as StreamSubscription?;
+    _uploadProgressSubscription = _uploadService!.progress.listen((progress) {
+      _uploadProgress = progress;
+      notifyListeners();
+    });
+
+    await _uploadService!.start();
   }
 
   Future<void> _startBatteryMonitor() async {
@@ -224,8 +220,11 @@ class RecLoProvider extends ChangeNotifier {
 
   void _onDeviceDisconnected() {
     debugPrint('RecLoProvider: Device disconnected');
-    _chunkManager.stop();
-    _audioSubscription?.cancel();
+    _uploadProgressSubscription?.cancel();
+    _uploadProgressSubscription = null;
+    _uploadService?.stop();
+    _uploadService = null;
+    _uploadProgress = null;
     _batterySubscription?.cancel();
     _connectedDevice = null;
     _batteryLevel = -1;
@@ -234,7 +233,6 @@ class RecLoProvider extends ChangeNotifier {
 
   // ─── Watchdog ──────────────────────────────────────────────────────────────
 
-  /// Watchdog tries to reconnect to the last known device every 30s
   void _startWatchdog() {
     _watchdogTimer?.cancel();
     _watchdogTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
@@ -243,7 +241,6 @@ class RecLoProvider extends ChangeNotifier {
 
       debugPrint('RecLoProvider: Watchdog — trying to reconnect to $_lastDeviceId');
 
-      // Try to find and reconnect to the last device
       try {
         await ble.FlutterBluePlus.startScan(
           withServices: [ble.Guid(omiServiceUuid)],
@@ -271,32 +268,25 @@ class RecLoProvider extends ChangeNotifier {
 
   // ─── User Actions ──────────────────────────────────────────────────────────
 
-  void finalizeNow() => _chunkManager.finalizeNow();
-
   Future<void> updateSilenceThreshold(double db) async {
     _silenceThresholdDb = db;
-    _chunkManager.silenceThresholdDb = db;
     await RecLoSettings.setDbThreshold(db);
     notifyListeners();
   }
 
   Future<void> updateSilenceGap(double minutes) async {
     _silenceGapMinutes = minutes;
-    _chunkManager.conversationGapThreshold =
-        Duration(seconds: (minutes * 60).round());
     await RecLoSettings.setSilenceGapMinutes(minutes);
     notifyListeners();
   }
 
   Future<void> disconnect() async {
-    _watchdogTimer?.cancel(); // Stop watchdog so it doesn't auto-reconnect
+    _watchdogTimer?.cancel();
     await _deviceConnection?.disconnect();
     _onDeviceDisconnected();
-    // Clear last device so watchdog doesn't try to reconnect
     _lastDeviceId = null;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_lastDeviceKey);
-    // Restart watchdog (will do nothing without lastDeviceId)
     _startWatchdog();
   }
 
@@ -310,9 +300,9 @@ class RecLoProvider extends ChangeNotifier {
   @override
   void dispose() {
     _watchdogTimer?.cancel();
-    _audioSubscription?.cancel();
+    _uploadProgressSubscription?.cancel();
     _batterySubscription?.cancel();
-    _chunkManager.dispose();
+    _uploadService?.dispose();
     super.dispose();
   }
 }

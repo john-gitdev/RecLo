@@ -2,14 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:reclo/services/audio_chunk_manager.dart';
+import 'package:reclo/services/chunk_upload_service.dart';
 
 class HomeScreen extends StatelessWidget {
   final bool isConnected;
-  final bool isRecording;
+  final bool isUploading;
   final bool isScanning;
   final List<Conversation> conversations;
-  final List<AudioChunk> pendingChunks;
-  final VoidCallback onFinalizePressed;
+  final UploadProgress? uploadProgress;
   final VoidCallback onScanPressed;
   final VoidCallback onSettingsPressed;
   final void Function(Conversation) onConversationTapped;
@@ -17,11 +17,10 @@ class HomeScreen extends StatelessWidget {
   const HomeScreen({
     super.key,
     required this.isConnected,
-    required this.isRecording,
+    required this.isUploading,
     required this.isScanning,
     required this.conversations,
-    required this.pendingChunks,
-    required this.onFinalizePressed,
+    required this.uploadProgress,
     required this.onScanPressed,
     required this.onSettingsPressed,
     required this.onConversationTapped,
@@ -36,13 +35,13 @@ class HomeScreen extends StatelessWidget {
           children: [
             _Header(
               isConnected: isConnected,
-              isRecording: isRecording,
+              isUploading: isUploading,
               isScanning: isScanning,
               onScanPressed: onScanPressed,
               onSettingsPressed: onSettingsPressed,
             ),
             Expanded(
-              child: conversations.isEmpty && pendingChunks.isEmpty
+              child: conversations.isEmpty && uploadProgress == null
                   ? _EmptyState(
                       isConnected: isConnected,
                       isScanning: isScanning,
@@ -50,15 +49,10 @@ class HomeScreen extends StatelessWidget {
                     )
                   : _ConversationList(
                       conversations: conversations,
-                      pendingChunks: pendingChunks,
+                      uploadProgress: uploadProgress,
                       onConversationTapped: onConversationTapped,
                     ),
             ),
-            if (pendingChunks.isNotEmpty)
-              _FinalizeBar(
-                chunkCount: pendingChunks.length,
-                onPressed: onFinalizePressed,
-              ),
           ],
         ),
       ),
@@ -70,14 +64,14 @@ class HomeScreen extends StatelessWidget {
 
 class _Header extends StatelessWidget {
   final bool isConnected;
-  final bool isRecording;
+  final bool isUploading;
   final bool isScanning;
   final VoidCallback onScanPressed;
   final VoidCallback onSettingsPressed;
 
   const _Header({
     required this.isConnected,
-    required this.isRecording,
+    required this.isUploading,
     required this.isScanning,
     required this.onScanPressed,
     required this.onSettingsPressed,
@@ -119,7 +113,6 @@ class _Header extends StatelessWidget {
               ],
             ),
           ),
-          // Device button
           GestureDetector(
             onTap: () {
               HapticFeedback.lightImpact();
@@ -127,12 +120,11 @@ class _Header extends StatelessWidget {
             },
             child: _StatusChip(
               isConnected: isConnected,
-              isRecording: isRecording,
+              isUploading: isUploading,
               isScanning: isScanning,
             ),
           ),
           const SizedBox(width: 8),
-          // Settings button
           GestureDetector(
             onTap: () {
               HapticFeedback.lightImpact();
@@ -170,12 +162,12 @@ class _Header extends StatelessWidget {
 
 class _StatusChip extends StatefulWidget {
   final bool isConnected;
-  final bool isRecording;
+  final bool isUploading;
   final bool isScanning;
 
   const _StatusChip({
     required this.isConnected,
-    required this.isRecording,
+    required this.isUploading,
     required this.isScanning,
   });
 
@@ -216,8 +208,8 @@ class _StatusChipState extends State<_StatusChip>
       label = 'Scanning...';
       dotColor = Colors.blueAccent;
       animate = true;
-    } else if (widget.isRecording) {
-      label = 'Recording';
+    } else if (widget.isUploading) {
+      label = 'Syncing';
       dotColor = const Color(0xFF4ADE80);
       animate = true;
     } else if (widget.isConnected) {
@@ -292,7 +284,7 @@ class _EmptyState extends StatelessWidget {
         children: [
           Icon(
             isConnected
-                ? Icons.mic_none_rounded
+                ? Icons.check_circle_outline_rounded
                 : Icons.bluetooth_disabled_rounded,
             size: 48,
             color: Colors.white12,
@@ -300,9 +292,9 @@ class _EmptyState extends StatelessWidget {
           const SizedBox(height: 16),
           Text(
             isConnected
-                ? 'Listening...'
+                ? 'Up to date'
                 : isScanning
-                    ? 'Looking for Omi...'
+                    ? 'Looking for device...'
                     : 'No device connected',
             style: const TextStyle(
               fontSize: 16,
@@ -313,9 +305,9 @@ class _EmptyState extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             isConnected
-                ? 'Conversations will appear here'
+                ? 'Recordings will sync automatically on connect'
                 : isScanning
-                    ? 'Make sure your Omi is nearby'
+                    ? 'Make sure your RecLo is nearby'
                     : 'Tap the status chip to scan',
             style: const TextStyle(
               fontSize: 13,
@@ -360,12 +352,12 @@ class _EmptyState extends StatelessWidget {
 
 class _ConversationList extends StatelessWidget {
   final List<Conversation> conversations;
-  final List<AudioChunk> pendingChunks;
+  final UploadProgress? uploadProgress;
   final void Function(Conversation) onConversationTapped;
 
   const _ConversationList({
     required this.conversations,
-    required this.pendingChunks,
+    required this.uploadProgress,
     required this.onConversationTapped,
   });
 
@@ -374,9 +366,9 @@ class _ConversationList extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       children: [
-        if (pendingChunks.isNotEmpty) ...[
-          _SectionLabel(label: 'In Progress'),
-          _PendingChunksCard(chunks: pendingChunks),
+        if (uploadProgress != null && !uploadProgress!.isComplete) ...[
+          _SectionLabel(label: 'Syncing'),
+          _UploadProgressCard(progress: uploadProgress!),
           const SizedBox(height: 8),
         ],
         if (conversations.isNotEmpty) ...[
@@ -418,14 +410,15 @@ class _SectionLabel extends StatelessWidget {
   }
 }
 
-class _PendingChunksCard extends StatelessWidget {
-  final List<AudioChunk> chunks;
-  const _PendingChunksCard({required this.chunks});
+class _UploadProgressCard extends StatelessWidget {
+  final UploadProgress progress;
+  const _UploadProgressCard({required this.progress});
 
   @override
   Widget build(BuildContext context) {
-    final speechChunks = chunks.where((c) => c.hasSpeech).length;
-    final totalChunks = chunks.length;
+    final received = progress.chunksReceived;
+    final total    = progress.totalChunks;
+    final fraction = progress.fraction;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -434,92 +427,67 @@ class _PendingChunksCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: Colors.white10),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: const Color(0xFF4ADE80).withOpacity(0.1),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(
-              Icons.graphic_eq_rounded,
-              color: Color(0xFF4ADE80),
-              size: 20,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Recording in progress',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.white,
-                    fontWeight: FontWeight.w500,
-                    fontFamily: 'SF Pro Display',
-                  ),
+          Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF4ADE80).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  '$speechChunks of $totalChunks chunks have speech',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Colors.white38,
-                    fontFamily: 'SF Pro Display',
-                  ),
+                child: const Icon(
+                  Icons.cloud_download_outlined,
+                  color: Color(0xFF4ADE80),
+                  size: 20,
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Syncing recordings',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w500,
+                        fontFamily: 'SF Pro Display',
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      total > 0
+                          ? '$received of $total chunk${total == 1 ? '' : 's'}'
+                          : 'Starting...',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.white38,
+                        fontFamily: 'SF Pro Display',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          _PulsingDot(),
+          if (total > 0) ...[
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: fraction,
+                minHeight: 3,
+                backgroundColor: Colors.white10,
+                valueColor: const AlwaysStoppedAnimation(Color(0xFF4ADE80)),
+              ),
+            ),
+          ],
         ],
-      ),
-    );
-  }
-}
-
-class _PulsingDot extends StatefulWidget {
-  @override
-  State<_PulsingDot> createState() => _PulsingDotState();
-}
-
-class _PulsingDotState extends State<_PulsingDot>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 1),
-    )..repeat(reverse: true);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (_, __) => Opacity(
-        opacity: 0.4 + (_controller.value * 0.6),
-        child: Container(
-          width: 8,
-          height: 8,
-          decoration: const BoxDecoration(
-            color: Color(0xFF4ADE80),
-            shape: BoxShape.circle,
-          ),
-        ),
       ),
     );
   }
@@ -536,9 +504,9 @@ class _ConversationCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final timeStr = _formatTime(conversation.startTime);
+    final timeStr     = _formatTime(conversation.startTime);
     final durationStr = _formatDuration(conversation.totalSpeech);
-    final chunkCount = conversation.chunks.length;
+    final chunkCount  = conversation.chunks.length;
 
     return GestureDetector(
       onTap: () {
@@ -562,7 +530,7 @@ class _ConversationCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(10),
               ),
               child: const Icon(
-                Icons.chat_bubble_outline_rounded,
+                Icons.mic_none_rounded,
                 color: Colors.white54,
                 size: 18,
               ),
@@ -573,7 +541,7 @@ class _ConversationCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Conversation · $timeStr',
+                    'Recording · $timeStr',
                     style: const TextStyle(
                       fontSize: 14,
                       color: Colors.white,
@@ -610,7 +578,7 @@ class _ConversationCard extends StatelessWidget {
         : dt.hour > 12
             ? dt.hour - 12
             : dt.hour;
-    final min = dt.minute.toString().padLeft(2, '0');
+    final min  = dt.minute.toString().padLeft(2, '0');
     final ampm = dt.hour < 12 ? 'AM' : 'PM';
     return '$hour:$min $ampm';
   }
@@ -619,53 +587,5 @@ class _ConversationCard extends StatelessWidget {
     if (d.inHours > 0) return '${d.inHours}h ${d.inMinutes.remainder(60)}m';
     if (d.inMinutes > 0) return '${d.inMinutes}m ${d.inSeconds.remainder(60)}s';
     return '${d.inSeconds}s';
-  }
-}
-
-// ─── Finalize Bar ─────────────────────────────────────────────────────────────
-
-class _FinalizeBar extends StatelessWidget {
-  final int chunkCount;
-  final VoidCallback onPressed;
-
-  const _FinalizeBar({
-    required this.chunkCount,
-    required this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
-      decoration: const BoxDecoration(
-        color: Color(0xFF0A0A0A),
-        border: Border(top: BorderSide(color: Colors.white10)),
-      ),
-      child: GestureDetector(
-        onTap: () {
-          HapticFeedback.mediumImpact();
-          onPressed();
-        },
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Center(
-            child: Text(
-              'Finalize  ·  $chunkCount chunk${chunkCount == 1 ? '' : 's'}',
-              style: const TextStyle(
-                fontSize: 15,
-                color: Colors.black,
-                fontWeight: FontWeight.w600,
-                fontFamily: 'SF Pro Display',
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
   }
 }

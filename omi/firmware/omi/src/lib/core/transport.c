@@ -30,6 +30,7 @@
 #include "settings.h"
 #include "storage.h"
 #include "rtc.h"
+#include "reclo_recorder.h"
 LOG_MODULE_REGISTER(transport, CONFIG_LOG_DEFAULT_LEVEL);
 
 #ifdef CONFIG_OMI_ENABLE_RFSW_CTRL
@@ -229,6 +230,7 @@ static ssize_t time_sync_write_handler(struct bt_conn *conn,
     }
 
     LOG_INF("Time synchronized successfully");
+    reclo_recorder_schedule_retimestamp();
     return len;
 }
 

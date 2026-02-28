@@ -32,4 +32,12 @@ void reclo_recorder_start(void);
 void reclo_recorder_stop(void);
 int  reclo_recorder_chunk_count(void);
 
+/**
+ * Schedule a background pass to rename any uptime-based (.upt) chunk files
+ * recorded before UTC was synchronized to proper .bin files with corrected
+ * timestamps. Safe to call from BT callback context; the actual work runs
+ * on the system work queue. No-op if UTC is not yet valid.
+ */
+void reclo_recorder_schedule_retimestamp(void);
+
 #endif /* RECLO_RECORDER_H */

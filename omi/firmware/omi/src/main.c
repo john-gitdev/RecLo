@@ -39,6 +39,7 @@ bool is_connected = false;
 bool is_charging = false;
 bool is_off = false;
 bool blink_toggle = false;
+bool led_user_off = false;  /* set by button double-tap to hide status LEDs */
 
 static void print_reset_reason(void)
 {
@@ -118,8 +119,7 @@ static void boot_ready_sequence(void)
 
 void set_led_state()
 {
-    // If device is off, turn off all LEDs immediately
-    if (is_off) {
+    if (is_off || led_user_off) {
         led_off();
         return;
     }

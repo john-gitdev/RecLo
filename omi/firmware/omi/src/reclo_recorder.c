@@ -6,6 +6,7 @@
 #include <zephyr/logging/log.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "lib/core/codec.h"
 #include "rtc.h"
@@ -23,8 +24,11 @@ static char             _active_path[64];
 static uint32_t         _chunk_start_ts;
 static bool             _recording;
 
+static bool             _chunk_unsynced; /* true when _chunk_start_ts is uptime-s, not UTC */
+
 static K_MUTEX_DEFINE(_mutex);
 static K_TIMER_DEFINE(_chunk_timer, NULL, NULL);
+static struct k_work    _retimestamp_work;
 
 /* ── Header helper ───────────────────────────────────────────────────────────
  * Writes the 17-byte RCLO file header with data_size = 0.
@@ -48,6 +52,13 @@ static void write_initial_header(struct fs_file_t *f, uint32_t ts)
 
 static int open_chunk_file(uint32_t ts)
 {
+    /* Always use uptime seconds as the chunk timestamp so that stale RTC
+     * epochs (e.g. after battery drain) don't corrupt filenames.
+     * reclo_recorder_retimestamp() corrects all .upt files on every sync. */
+    ARG_UNUSED(ts);
+    bool unsynced = true;
+    ts = (uint32_t)(k_uptime_get() / 1000);
+
     struct fs_dirent ent;
     if (fs_stat(RECLO_STORAGE_DIR, &ent) != 0) {
         fs_mkdir(RECLO_STORAGE_DIR);
@@ -66,6 +77,7 @@ static int open_chunk_file(uint32_t ts)
 
     write_initial_header(&_active_file, ts);
     _file_open            = true;
+    _chunk_unsynced       = unsynced;
     _write_buf_len        = 0;
     _total_bytes_in_chunk = 0;
     _chunk_start_ts       = ts;
@@ -91,17 +103,21 @@ static void finalize_chunk(void)
     fs_close(&_active_file);
     _file_open = false;
 
-    /* Atomically publish the chunk so reclo_transfer only sees complete files */
-    char bin_path[64];
-    snprintf(bin_path, sizeof(bin_path),
-             "%s/%010u.bin", RECLO_STORAGE_DIR, _chunk_start_ts);
-    int rename_err = fs_rename(_active_path, bin_path);
+    /* Atomically publish the chunk.  Use .upt extension when the timestamp is
+     * uptime-based (UTC was not synced); reclo_transfer ignores .upt files
+     * until reclo_recorder_retimestamp() renames them to .bin. */
+    char final_path[64];
+    snprintf(final_path, sizeof(final_path),
+             "%s/%010u.%s", RECLO_STORAGE_DIR, _chunk_start_ts,
+             _chunk_unsynced ? "upt" : "bin");
+    int rename_err = fs_rename(_active_path, final_path);
     if (rename_err) {
-        LOG_ERR("fs_rename(%s → %s): %d", _active_path, bin_path, rename_err);
+        LOG_ERR("fs_rename(%s → %s): %d", _active_path, final_path, rename_err);
     }
 
-    LOG_INF("Finalized chunk ts=%u (%u bytes) → %s",
-            _chunk_start_ts, _total_bytes_in_chunk, bin_path);
+    LOG_INF("Finalized chunk ts=%u (%u bytes) → %s%s",
+            _chunk_start_ts, _total_bytes_in_chunk, final_path,
+            _chunk_unsynced ? " [unsynced]" : "");
 }
 
 /* ── Codec callback ──────────────────────────────────────────────────────────
@@ -185,16 +201,144 @@ static void flush_thread_fn(void *a, void *b, void *c)
     }
 }
 
+/* ── Retimestamp ─────────────────────────────────────────────────────────────
+ * Corrects uptime-based timestamps on chunk files once UTC is known.
+ *
+ * For any chunk recorded while UTC was unsynced:
+ *   real_ts = now_utc_s - (now_uptime_s - file_uptime_ts)
+ *
+ * Handles both the currently-open .tmp file and any finalized .upt files.
+ */
+
+static void reclo_recorder_retimestamp(void)
+{
+    uint32_t now_utc_s = get_utc_time();
+    if (now_utc_s == 0) {
+        return;
+    }
+    uint32_t now_up_s = (uint32_t)(k_uptime_get() / 1000);
+
+    /* ── Patch the currently-open chunk file if it was unsynced ─────────── */
+    k_mutex_lock(&_mutex, K_FOREVER);
+
+    if (_file_open && _chunk_unsynced) {
+        uint32_t uptime_ts = _chunk_start_ts;
+        uint32_t elapsed   = (now_up_s >= uptime_ts) ? (now_up_s - uptime_ts) : 0;
+        uint32_t real_ts   = now_utc_s - elapsed;
+
+        /* Flush write buffer before closing */
+        if (_write_buf_len > 0) {
+            fs_write(&_active_file, _write_buf, _write_buf_len);
+            _write_buf_len = 0;
+        }
+
+        /* Patch timestamp at file header offset 4 */
+        fs_seek(&_active_file, 4, FS_SEEK_SET);
+        fs_write(&_active_file, &real_ts, sizeof(real_ts));
+
+        /* Close → rename → reopen (FAT FS requires file closed for rename) */
+        fs_close(&_active_file);
+
+        char new_path[64];
+        snprintf(new_path, sizeof(new_path),
+                 "%s/%010u.tmp", RECLO_STORAGE_DIR, real_ts);
+
+        if (fs_rename(_active_path, new_path) == 0) {
+            memcpy(_active_path, new_path, sizeof(_active_path));
+        } else {
+            LOG_ERR("retimestamp: rename open file failed");
+        }
+
+        fs_file_t_init(&_active_file);
+        int err = fs_open(&_active_file, _active_path, FS_O_WRITE);
+        if (err) {
+            LOG_ERR("retimestamp: reopen %s failed: %d", _active_path, err);
+            _file_open = false;
+        } else {
+            fs_seek(&_active_file, 0, FS_SEEK_END);
+        }
+
+        _chunk_start_ts = real_ts;
+        _chunk_unsynced = false;
+        LOG_INF("Retimestamped open chunk: uptime=%u → utc=%u", uptime_ts, real_ts);
+    }
+
+    k_mutex_unlock(&_mutex);
+
+    /* ── Scan for .upt files; collect then rename outside enumeration ────── */
+    static uint32_t upt_ts[RECLO_MAX_CHUNKS];
+    int upt_count = 0;
+
+    struct fs_dir_t  dir;
+    struct fs_dirent ent;
+    fs_dir_t_init(&dir);
+
+    if (fs_opendir(&dir, RECLO_STORAGE_DIR) == 0) {
+        while (upt_count < RECLO_MAX_CHUNKS &&
+               fs_readdir(&dir, &ent) == 0 && ent.name[0] != '\0') {
+            size_t nlen = strlen(ent.name);
+            /* Expect exactly "0123456789.upt" = 14 chars */
+            if (ent.type == FS_DIR_ENTRY_FILE && nlen == 14 &&
+                strcmp(ent.name + 10, ".upt") == 0) {
+                char ts_str[11];
+                memcpy(ts_str, ent.name, 10);
+                ts_str[10] = '\0';
+                upt_ts[upt_count++] = (uint32_t)strtoul(ts_str, NULL, 10);
+            }
+        }
+        fs_closedir(&dir);
+    }
+
+    for (int i = 0; i < upt_count; i++) {
+        uint32_t elapsed = (now_up_s >= upt_ts[i]) ? (now_up_s - upt_ts[i]) : 0;
+        uint32_t real_ts = now_utc_s - elapsed;
+
+        char old_path[64], new_path[64];
+        snprintf(old_path, sizeof(old_path),
+                 "%s/%010u.upt", RECLO_STORAGE_DIR, upt_ts[i]);
+        snprintf(new_path, sizeof(new_path),
+                 "%s/%010u.bin", RECLO_STORAGE_DIR, real_ts);
+
+        /* Patch timestamp in file header */
+        struct fs_file_t f;
+        fs_file_t_init(&f);
+        if (fs_open(&f, old_path, FS_O_RDWR) == 0) {
+            fs_seek(&f, 4, FS_SEEK_SET);
+            fs_write(&f, &real_ts, sizeof(real_ts));
+            fs_close(&f);
+        }
+
+        int err = fs_rename(old_path, new_path);
+        if (err) {
+            LOG_ERR("retimestamp: %s → %s failed: %d", old_path, new_path, err);
+        } else {
+            LOG_INF("Retimestamped chunk: uptime=%u → utc=%u", upt_ts[i], real_ts);
+        }
+    }
+}
+
+static void retimestamp_work_fn(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    reclo_recorder_retimestamp();
+}
+
+void reclo_recorder_schedule_retimestamp(void)
+{
+    k_work_submit(&_retimestamp_work);
+}
+
 /* ── Public API ──────────────────────────────────────────────────────────────*/
 
 int reclo_recorder_init(void)
 {
     _file_open            = false;
     _recording            = false;
+    _chunk_unsynced       = false;
     _write_buf_len        = 0;
     _total_bytes_in_chunk = 0;
 
-    k_timer_init(&_chunk_timer, NULL, NULL);
+    k_work_init(&_retimestamp_work, retimestamp_work_fn);
 
     k_thread_create(
         &_flush_thread, _flush_stack, FLUSH_THREAD_STACK,

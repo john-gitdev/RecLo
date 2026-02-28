@@ -48,7 +48,13 @@ class AudioStitcher {
         // Read raw bytes from disk
         final file = File(chunk.filePath);
         if (!await file.exists()) continue;
-        final bytes = await file.readAsBytes();
+        final raw = await file.readAsBytes();
+
+        // Strip the 44-byte WAV header so we only process PCM samples
+        const int wavHeaderBytes = 44;
+        final bytes = raw.length > wavHeaderBytes
+            ? raw.sublist(wavHeaderBytes)
+            : raw;
 
         final analysis = chunk.silenceAnalysis;
         if (analysis == null) {

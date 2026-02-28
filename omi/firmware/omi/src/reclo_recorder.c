@@ -54,7 +54,7 @@ static int open_chunk_file(uint32_t ts)
     }
 
     snprintf(_active_path, sizeof(_active_path),
-             "%s/%010u.bin", RECLO_STORAGE_DIR, ts);
+             "%s/%010u.tmp", RECLO_STORAGE_DIR, ts);
 
     fs_file_t_init(&_active_file);
     int err = fs_open(&_active_file, _active_path,
@@ -91,8 +91,17 @@ static void finalize_chunk(void)
     fs_close(&_active_file);
     _file_open = false;
 
+    /* Atomically publish the chunk so reclo_transfer only sees complete files */
+    char bin_path[64];
+    snprintf(bin_path, sizeof(bin_path),
+             "%s/%010u.bin", RECLO_STORAGE_DIR, _chunk_start_ts);
+    int rename_err = fs_rename(_active_path, bin_path);
+    if (rename_err) {
+        LOG_ERR("fs_rename(%s → %s): %d", _active_path, bin_path, rename_err);
+    }
+
     LOG_INF("Finalized chunk ts=%u (%u bytes) → %s",
-            _chunk_start_ts, _total_bytes_in_chunk, _active_path);
+            _chunk_start_ts, _total_bytes_in_chunk, bin_path);
 }
 
 /* ── Codec callback ──────────────────────────────────────────────────────────

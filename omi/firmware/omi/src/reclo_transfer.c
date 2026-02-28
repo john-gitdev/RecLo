@@ -208,7 +208,12 @@ int reclo_transfer_count_chunks(void)
 
     int count = 0;
     while (fs_readdir(&dir, &ent) == 0 && ent.name[0] != '\0') {
-        if (ent.type == FS_DIR_ENTRY_FILE) count++;
+        size_t nlen = strlen(ent.name);
+        if (ent.type == FS_DIR_ENTRY_FILE &&
+            nlen > 4 &&
+            strcmp(ent.name + nlen - 4, ".bin") == 0) {
+            count++;
+        }
     }
     fs_closedir(&dir);
     return count;
@@ -246,6 +251,24 @@ static int upload_one_chunk(const char *path, uint16_t idx, uint16_t total)
     codec_id = file_hdr[8];
     memcpy(&sample_rate, &file_hdr[9],  4);
     memcpy(&data_size,   &file_hdr[13], 4);
+
+    /* Recover unfinalized chunks: power loss left data_size = 0.
+     * Seek to end to find the actual data size. */
+    if (data_size == 0) {
+        if (fs_seek(&f, 0, FS_SEEK_END) == 0) {
+            off_t file_sz = fs_tell(&f);
+            if (file_sz > (off_t)sizeof(file_hdr)) {
+                data_size = (uint32_t)(file_sz - sizeof(file_hdr));
+                LOG_WRN("Unfinalized chunk ts=%u: recovered data_size=%u", ts, data_size);
+            }
+        }
+        if (data_size == 0) {
+            LOG_WRN("Skipping empty chunk ts=%u", ts);
+            fs_close(&f);
+            return -ENODATA;
+        }
+    }
+
     fs_close(&f);
 
     /* Compute CRC-32 over the Opus data bytes */
@@ -358,7 +381,11 @@ static void upload_thread_fn(void *a, void *b, void *c)
             while (count < RECLO_MAX_CHUNKS &&
                    fs_readdir(&dir, &ent) == 0 &&
                    ent.name[0] != '\0') {
-                if (ent.type == FS_DIR_ENTRY_FILE) {
+                size_t nlen = strlen(ent.name);
+                bool is_bin = (ent.type == FS_DIR_ENTRY_FILE &&
+                               nlen > 4 &&
+                               strcmp(ent.name + nlen - 4, ".bin") == 0);
+                if (is_bin) {
                     snprintf(paths[count], sizeof(paths[count]),
                              "%s/%s", RECLO_STORAGE_DIR, ent.name);
                     count++;

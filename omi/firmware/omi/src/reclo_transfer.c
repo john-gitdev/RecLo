@@ -11,30 +11,6 @@
 
 LOG_MODULE_REGISTER(reclo_transfer, LOG_LEVEL_INF);
 
-/* ── Time ────────────────────────────────────────────────────────────────────*/
-
-static uint32_t _epoch_base;      /* UTC epoch at the moment _uptime_base was recorded */
-static int64_t  _uptime_base_ms;  /* k_uptime_get() value when _epoch_base was set    */
-static bool     _time_synced;
-
-uint32_t reclo_time_get(void)
-{
-    if (!_time_synced) {
-        /* Not yet synced — return uptime seconds as a monotonic fallback */
-        return (uint32_t)(k_uptime_get() / 1000);
-    }
-    int64_t elapsed_ms = k_uptime_get() - _uptime_base_ms;
-    return _epoch_base + (uint32_t)(elapsed_ms / 1000);
-}
-
-void reclo_time_set(uint32_t epoch_seconds)
-{
-    _epoch_base     = epoch_seconds;
-    _uptime_base_ms = k_uptime_get();
-    _time_synced    = true;
-    LOG_INF("Time synced: epoch=%u", epoch_seconds);
-}
-
 /* ── BLE state ───────────────────────────────────────────────────────────────*/
 
 static struct bt_conn *_conn;
@@ -103,7 +79,6 @@ static ssize_t ctrl_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
         if (len >= 5) {
             uint32_t ts;
             memcpy(&ts, &data[1], sizeof(ts));
-            /* Delete the chunk file with this timestamp */
             char path[64];
             snprintf(path, sizeof(path), "%s/%010u.bin", RECLO_STORAGE_DIR, ts);
             int err = fs_unlink(path);
@@ -156,7 +131,6 @@ BT_GATT_SERVICE_DEFINE(reclo_svc,
         NULL, ctrl_write, NULL),
 );
 
-/* Data characteristic value is at attrs[2] */
 #define DATA_ATTR  (&reclo_svc.attrs[2])
 
 /* ── Packet transmission ─────────────────────────────────────────────────────*/
@@ -242,15 +216,6 @@ int reclo_transfer_count_chunks(void)
 
 /* ── Upload logic ────────────────────────────────────────────────────────────*/
 
-/*
- * Upload a single chunk file.
- *
- * Sends:
- *   - 1 CHUNK_HEADER packet  (seq=0, metadata in payload)
- *   - N CHUNK_DATA  packets  (seq=1..N, raw Opus bytes in payload)
- *
- * Does NOT delete the file; deletion happens after ACK from phone.
- */
 static int upload_one_chunk(const char *path, uint16_t idx, uint16_t total)
 {
     struct fs_file_t f;
@@ -262,7 +227,6 @@ static int upload_one_chunk(const char *path, uint16_t idx, uint16_t total)
         return err;
     }
 
-    /* Read file header */
     uint8_t file_hdr[17];
     if (fs_read(&f, file_hdr, sizeof(file_hdr)) != (ssize_t)sizeof(file_hdr)) {
         fs_close(&f);
@@ -284,7 +248,7 @@ static int upload_one_chunk(const char *path, uint16_t idx, uint16_t total)
     memcpy(&data_size,   &file_hdr[13], 4);
     fs_close(&f);
 
-    /* Compute CRC-32 over the Opus data bytes (not the file header) */
+    /* Compute CRC-32 over the Opus data bytes */
     uint32_t crc = 0;
     {
         struct fs_file_t f2;
@@ -300,9 +264,6 @@ static int upload_one_chunk(const char *path, uint16_t idx, uint16_t total)
         fs_close(&f2);
     }
 
-    /*
-     * total_seqs = 1 (header) + ceil(data_size / RECLO_PAYLOAD_SIZE)
-     */
     uint16_t data_seqs  = (uint16_t)((data_size + RECLO_PAYLOAD_SIZE - 1) / RECLO_PAYLOAD_SIZE);
     uint16_t total_seqs = 1 + data_seqs;
 
@@ -328,7 +289,7 @@ static int upload_one_chunk(const char *path, uint16_t idx, uint16_t total)
     err = send_packet(&pkt);
     if (err) return err;
 
-    k_msleep(10);   /* brief pause so phone can process the header */
+    k_msleep(10);
 
     /* ── Send CHUNK_DATA packets ── */
     struct fs_file_t fd;
@@ -363,7 +324,6 @@ static int upload_one_chunk(const char *path, uint16_t idx, uint16_t total)
             return err;
         }
 
-        /* Pace the BLE TX queue: ~244 bytes @ ~90 KB/s ≈ 3ms; 8ms gives headroom */
         k_msleep(8);
     }
 
@@ -378,7 +338,6 @@ static void upload_thread_fn(void *a, void *b, void *c)
 {
     ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
 
-    /* File paths sorted by name (= timestamp order) */
     static char paths[RECLO_MAX_CHUNKS][64];
 
     while (true) {
@@ -410,7 +369,6 @@ static void upload_thread_fn(void *a, void *b, void *c)
 
         if (count == 0) {
             LOG_INF("No chunks to upload");
-            /* Send UPLOAD_DONE immediately so the phone knows */
             RecloPacket done;
             memset(&done, 0, sizeof(done));
             done.pkt_type = RECLO_PKT_UPLOAD_DONE;
@@ -419,7 +377,7 @@ static void upload_thread_fn(void *a, void *b, void *c)
             continue;
         }
 
-        /* Sort filenames ascending (strcmp on zero-padded timestamps = numeric order) */
+        /* Sort filenames ascending (zero-padded timestamps = lexicographic = numeric order) */
         for (int i = 1; i < count; i++) {
             char tmp[64];
             int  j = i;
@@ -438,7 +396,7 @@ static void upload_thread_fn(void *a, void *b, void *c)
             if (err == -ECANCELED) break;
             if (err) LOG_WRN("Chunk %d upload error %d — continuing", i, err);
 
-            k_msleep(20);   /* gap between chunks */
+            k_msleep(20);
         }
 
         if (_upload_active) {
@@ -453,7 +411,7 @@ static void upload_thread_fn(void *a, void *b, void *c)
     }
 }
 
-/* ── BT connection callbacks (auto-registered) ───────────────────────────────*/
+/* ── BT connection callbacks ─────────────────────────────────────────────────*/
 
 static void _on_connected(struct bt_conn *conn, uint8_t err)
 {
@@ -486,7 +444,6 @@ int reclo_transfer_init(void)
     _conn           = NULL;
     _notify_enabled = false;
     _upload_active  = false;
-    _time_synced    = false;
 
     k_thread_create(
         &_upload_thread, _upload_stack, UPLOAD_STACK_SIZE,

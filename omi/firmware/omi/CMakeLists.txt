@@ -17,6 +17,8 @@ file(GLOB app_sources
     src/wdog_facade.c
     src/rtc.c
     src/imu.c
+    src/reclo_recorder.c
+    src/reclo_transfer.c
 )
 file(GLOB core_sources
     src/lib/core/config.h

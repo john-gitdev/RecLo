@@ -26,6 +26,8 @@
 #include "lib/core/sd_card.h"
 #include "spi_flash.h"
 #include "wdog_facade.h"
+#include "reclo_recorder.h"
+#include "reclo_transfer.h"
 
 LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -59,19 +61,6 @@ static void print_reset_reason(void)
         printk("Reset by a different source (0x%08X)\n", reas);
     } else {
         printk("Power-on-reset\n");
-    }
-}
-
-static void codec_handler(uint8_t *data, size_t len)
-{
-#ifdef CONFIG_OMI_ENABLE_MONITOR
-    monitor_inc_broadcast_audio();
-#endif
-    int err = broadcast_audio_packets(data, len);
-    if (err) {
-#ifdef CONFIG_OMI_ENABLE_MONITOR
-        monitor_inc_broadcast_audio_failed();
-#endif
     }
 }
 
@@ -311,16 +300,30 @@ int main(void)
         return transportErr;
     }
 
+    // RecLo transfer service (BLE chunk upload)
+    ret = reclo_transfer_init();
+    if (ret) {
+        LOG_ERR("RecLo transfer init failed (err %d)", ret);
+    }
+
     // Initialize codec
     LOG_INF("Initializing codec...\n");
 
-    // Set codec callback
-    set_codec_callback(codec_handler);
     ret = codec_start();
     if (ret) {
         LOG_ERR("Failed to start codec: %d", ret);
         error_codec();
         return ret;
+    }
+
+    // RecLo recorder — takes over the codec callback for offline recording
+    ret = reclo_recorder_init();
+    if (ret) {
+        LOG_ERR("RecLo recorder init failed (err %d)", ret);
+    } else {
+        reclo_recorder_start();
+        LOG_INF("RecLo recorder started — %d chunk(s) on SD card",
+                reclo_recorder_chunk_count());
     }
 
     // Initialize microphone

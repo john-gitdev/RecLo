@@ -39,7 +39,7 @@
  *   [9..12]  crc32        — CRC-32/ISO-HDLC of the Opus data bytes (uint32)
  *
  * CHUNK_DATA payload:
- *   Raw Opus bytes (length-prefixed frames as stored on flash).
+ *   Raw Opus bytes (length-prefixed frames as stored on SD card).
  *
  * Control commands (phone → device, 1–5 bytes):
  *   0x01                   — REQUEST_UPLOAD
@@ -71,8 +71,8 @@
 /* Maximum chunks the upload queue can hold */
 #define RECLO_MAX_CHUNKS  64
 
-/* Storage directory on flash filesystem */
-#define RECLO_STORAGE_DIR  "/lfs/reclo"
+/* Storage directory on SD card filesystem */
+#define RECLO_STORAGE_DIR  "/SD:/reclo"
 
 /* ── Packed structures ──────────────────────────────────────────────────────*/
 
@@ -105,12 +105,12 @@ _Static_assert(sizeof(RecloPacket) == RECLO_PACKET_SIZE,
  * Initialize the transfer service.
  * Spawns the upload thread. BT connection callbacks are registered
  * automatically via BT_CONN_CB_DEFINE — no manual wiring needed.
- * Must be called once during boot, before codec_start().
+ * Must be called once during boot, after transport_start().
  */
 int reclo_transfer_init(void);
 
 /**
- * Store a completed audio chunk to flash.
+ * Store a completed audio chunk to the SD card.
  * Called by reclo_recorder after each 15-second chunk is ready.
  *
  * @param ts    Unix epoch seconds when the chunk recording started.
@@ -122,19 +122,8 @@ int reclo_transfer_init(void);
 int reclo_transfer_store_chunk(uint32_t ts, const uint8_t *data, size_t len);
 
 /**
- * Return the number of chunk files currently on flash.
+ * Return the number of chunk files currently on the SD card.
  */
 int reclo_transfer_count_chunks(void);
-
-/**
- * Get the current Unix epoch time in seconds.
- * Updated by the phone on BLE connect; falls back to uptime if not yet set.
- */
-uint32_t reclo_time_get(void);
-
-/**
- * Set the Unix epoch time (called by the BLE time-sync write handler).
- */
-void reclo_time_set(uint32_t epoch_seconds);
 
 #endif /* RECLO_TRANSFER_H */

@@ -315,6 +315,12 @@ static void reclo_recorder_retimestamp(void)
             LOG_INF("Retimestamped chunk: uptime=%u → utc=%u", upt_ts[i], real_ts);
         }
     }
+
+    /* If we hit the max array size, there might be more .upt files waiting.
+     * Resubmit the work item to process the next batch. */
+    if (upt_count == RECLO_MAX_CHUNKS) {
+        k_work_submit(&_retimestamp_work);
+    }
 }
 
 static void retimestamp_work_fn(struct k_work *work)

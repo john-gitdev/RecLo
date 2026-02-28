@@ -358,7 +358,7 @@ static int upload_one_chunk(const char *path, uint16_t idx, uint16_t total)
 /* ── Upload thread ───────────────────────────────────────────────────────────*/
 
 /* File-scope to keep off the upload thread stack (would consume entire 4KB) */
-static char _upload__upload_paths[RECLO_MAX_CHUNKS][64];
+static char _upload_paths[RECLO_MAX_CHUNKS][64];
 
 static void upload_thread_fn(void *a, void *b, void *c)
 {

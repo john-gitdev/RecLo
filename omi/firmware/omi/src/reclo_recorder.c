@@ -183,7 +183,7 @@ static void rotate_chunk(void)
 
 /* ── Flush thread ────────────────────────────────────────────────────────────*/
 
-#define FLUSH_THREAD_STACK  2048
+#define FLUSH_THREAD_STACK  4096
 #define FLUSH_THREAD_PRIO   6
 
 K_THREAD_STACK_DEFINE(_flush_stack, FLUSH_THREAD_STACK);

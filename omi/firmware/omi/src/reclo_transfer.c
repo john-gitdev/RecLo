@@ -19,7 +19,7 @@ static bool _upload_active;
 
 /* ── Upload thread ───────────────────────────────────────────────────────────*/
 
-#define UPLOAD_STACK_SIZE  4096
+#define UPLOAD_STACK_SIZE  6144
 #define UPLOAD_THREAD_PRIO    5
 
 K_THREAD_STACK_DEFINE(_upload_stack, UPLOAD_STACK_SIZE);
@@ -357,11 +357,12 @@ static int upload_one_chunk(const char *path, uint16_t idx, uint16_t total)
 
 /* ── Upload thread ───────────────────────────────────────────────────────────*/
 
+/* File-scope to keep off the upload thread stack (would consume entire 4KB) */
+static char _upload__upload_paths[RECLO_MAX_CHUNKS][64];
+
 static void upload_thread_fn(void *a, void *b, void *c)
 {
     ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
-
-    static char paths[RECLO_MAX_CHUNKS][64];
 
     while (true) {
         k_sem_take(&_upload_sem, K_FOREVER);
@@ -386,7 +387,7 @@ static void upload_thread_fn(void *a, void *b, void *c)
                                nlen > 4 &&
                                strcmp(ent.name + nlen - 4, ".bin") == 0);
                 if (is_bin) {
-                    snprintf(paths[count], sizeof(paths[count]),
+                    snprintf(_upload_paths[count], sizeof(_upload_paths[count]),
                              "%s/%s", RECLO_STORAGE_DIR, ent.name);
                     count++;
                 }
@@ -408,10 +409,10 @@ static void upload_thread_fn(void *a, void *b, void *c)
         for (int i = 1; i < count; i++) {
             char tmp[64];
             int  j = i;
-            while (j > 0 && strcmp(paths[j - 1], paths[j]) > 0) {
-                memcpy(tmp,          paths[j - 1], sizeof(tmp));
-                memcpy(paths[j - 1], paths[j],     sizeof(tmp));
-                memcpy(paths[j],     tmp,           sizeof(tmp));
+            while (j > 0 && strcmp(_upload_paths[j - 1], _upload_paths[j]) > 0) {
+                memcpy(tmp,          _upload_paths[j - 1], sizeof(tmp));
+                memcpy(_upload_paths[j - 1], _upload_paths[j],     sizeof(tmp));
+                memcpy(_upload_paths[j],     tmp,           sizeof(tmp));
                 j--;
             }
         }
@@ -419,7 +420,7 @@ static void upload_thread_fn(void *a, void *b, void *c)
         LOG_INF("Starting upload: %d chunk(s)", count);
 
         for (int i = 0; i < count && _upload_active; i++) {
-            int err = upload_one_chunk(paths[i], (uint16_t)i, (uint16_t)count);
+            int err = upload_one_chunk(_upload_paths[i], (uint16_t)i, (uint16_t)count);
             if (err == -ECANCELED) break;
             if (err) LOG_WRN("Chunk %d upload error %d — continuing", i, err);
 

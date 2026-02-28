@@ -239,17 +239,7 @@ abstract class DeviceConnection {
   Future<int> performRetrieveBatteryLevel();
   Future<StreamSubscription<List<int>>?> getBleBatteryLevelListener({void Function(int)? onBatteryLevelChange}) async => await performGetBleBatteryLevelListener(onBatteryLevelChange: onBatteryLevelChange);
   Future<StreamSubscription<List<int>>?> performGetBleBatteryLevelListener({void Function(int)? onBatteryLevelChange});
-  Future<StreamSubscription?> getBleAudioBytesListener({required void Function(List<int>) onAudioBytesReceived}) async => await performGetBleAudioBytesListener(onAudioBytesReceived: onAudioBytesReceived);
-  Future<StreamSubscription?> performGetBleAudioBytesListener({required void Function(List<int>) onAudioBytesReceived});
-  Future<BleAudioCodec> getAudioCodec() async => await performGetAudioCodec();
-  Future<BleAudioCodec> performGetAudioCodec();
 
-  Future<void> performSetAudioCodec(int codecId) async {}
-  Future<void> setAudioCodec(int codecId) async {
-    if (await isConnected()) await performSetAudioCodec(codecId);
-  }
-
-  Future<int> getFeatures() async => 3;
   Future<int> getLedDimRatio() async => 50;
   Future<int> getMicGain() async => 50;
   Future<void> setLedDimRatio(int r) async {}

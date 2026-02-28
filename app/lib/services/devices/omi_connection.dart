@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 
-import 'package:reclo/backend/schema/bt_device/bt_device.dart';
 import 'package:reclo/services/devices/device_connection.dart';
 import 'package:reclo/services/devices/models.dart';
 
@@ -88,58 +87,6 @@ class OmiDeviceConnection extends DeviceConnection {
     } catch (e) {
       debugPrint('OmiDeviceConnection: Error setting up battery listener: $e');
       return null;
-    }
-  }
-
-  @override
-  Future<StreamSubscription?> performGetBleAudioBytesListener({
-    required void Function(List<int>) onAudioBytesReceived,
-  }) async {
-    try {
-      final stream = transport.getCharacteristicStream(omiServiceUuid, audioDataStreamCharacteristicUuid);
-      debugPrint('Subscribed to audioBytes stream from Omi Device');
-      return stream.listen((value) {
-        if (value.isNotEmpty) onAudioBytesReceived(value);
-      });
-    } catch (e) {
-      debugPrint('OmiDeviceConnection: Error setting up audio listener: $e');
-      return null;
-    }
-  }
-
-  @override
-  Future<BleAudioCodec> performGetAudioCodec() async {
-    try {
-      final codecValue = await transport.readCharacteristic(omiServiceUuid, audioCodecCharacteristicUuid);
-      var codecId = 1;
-      if (codecValue.isNotEmpty) {
-        codecId = codecValue[0];
-      }
-
-      switch (codecId) {
-        case 1:
-          return BleAudioCodec.pcm8;
-        case 20:
-          return BleAudioCodec.opus;
-        case 21:
-          return BleAudioCodec.opusFS320;
-        default:
-          debugPrint('OmiDeviceConnection: Unknown codec id: $codecId');
-          return BleAudioCodec.pcm8;
-      }
-    } catch (e) {
-      debugPrint('OmiDeviceConnection: Error reading audio codec: $e');
-      return BleAudioCodec.pcm8;
-    }
-  }
-
-  @override
-  Future<void> performSetAudioCodec(int codecId) async {
-    try {
-      await transport.writeCharacteristic(omiServiceUuid, audioCodecCharacteristicUuid, [codecId]);
-      debugPrint('OmiDeviceConnection: Audio codec set to $codecId');
-    } catch (e) {
-      debugPrint('OmiDeviceConnection: Error setting audio codec: $e');
     }
   }
 

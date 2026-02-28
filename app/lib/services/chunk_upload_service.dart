@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -33,6 +34,9 @@ const int _kPktUploadDone  = 0x03;
 const int _kCmdRequestUpload = 0x01;
 const int _kCmdAckChunk      = 0x02; // + 4-byte LE timestamp
 const int _kCmdAbort         = 0x03;
+
+// WAV header is always 44 bytes (PCM format, no extra chunks)
+const int _kWavHeaderSize = 44;
 
 // ─── Progress model ───────────────────────────────────────────────────────────
 
@@ -90,22 +94,10 @@ class _IncomingChunk {
 
 /// Manages the offline BLE chunk upload from a RecLo device.
 ///
-/// Usage:
-/// ```dart
-/// final svc = ChunkUploadService(transport: transport);
-/// svc.progress.listen((p) => print(p));
-/// await svc.start();
-/// // … wait for isComplete …
-/// await svc.dispose();
-/// ```
-///
-/// The service:
-///   1. Subscribes to the RecLo data characteristic.
-///   2. Writes REQUEST_UPLOAD to the control characteristic.
-///   3. Reassembles 244-byte packets into Opus chunks.
-///   4. Decodes Opus → PCM16, runs silence analysis, saves WAV files.
-///   5. ACKs each chunk so the device can delete it from flash.
-///   6. On UPLOAD_DONE, groups chunks into conversations and stitches them.
+/// Stitching is deferred until a conversation is confirmed closed by a
+/// silence boundary. The "tail" — chunks after the last boundary — is
+/// persisted across sessions so that a conversation spanning two upload
+/// sessions is assembled correctly rather than split into two files.
 class ChunkUploadService {
   final DeviceTransport _transport;
   final double silenceThresholdDb;
@@ -122,6 +114,9 @@ class ChunkUploadService {
   _IncomingChunk? _current;
   final List<AudioChunk> _completedChunks = [];
 
+  // Chunks carried over from the previous upload session's open tail.
+  List<AudioChunk> _pendingTailChunks = [];
+
   bool _opusReady = false;
   SimpleOpusDecoder? _opusDecoder;
 
@@ -137,6 +132,7 @@ class ChunkUploadService {
   /// Subscribe to BLE notifications and request the upload.
   Future<void> start() async {
     await _initOpus();
+    await _loadPendingTail();   // carry over open tail from last session
     _completedChunks.clear();
     _current = null;
 
@@ -182,7 +178,7 @@ class ChunkUploadService {
     await _progressController.close();
   }
 
-  // ─── Packet dispatch ─────────────────────────────────────────────────────────
+  // ─── Packet dispatch ──────────────────────────────────────────────────────
 
   void _onPacket(List<int> rawBytes) {
     if (rawBytes.length != _kPacketSize) {
@@ -204,7 +200,7 @@ class ChunkUploadService {
     }
   }
 
-  // ─── Header packet ────────────────────────────────────────────────────────────
+  // ─── Header packet ────────────────────────────────────────────────────────
   //
   // Byte layout (matches RecloPacket in reclo_transfer.h):
   //   [0]      pkt_type
@@ -254,7 +250,7 @@ class ChunkUploadService {
         'ts=$ts size=$dataSize seqs=$totalSeqs');
   }
 
-  // ─── Data packet ──────────────────────────────────────────────────────────────
+  // ─── Data packet ──────────────────────────────────────────────────────────
 
   void _handleData(Uint8List data) {
     if (_current == null) return;
@@ -274,15 +270,12 @@ class ChunkUploadService {
     }
   }
 
-  // ─── Chunk finalization ───────────────────────────────────────────────────────
+  // ─── Chunk finalization ───────────────────────────────────────────────────
 
   Future<void> _finalizeChunk(_IncomingChunk incoming) async {
     final opusBytes = Uint8List.fromList(incoming.buffer);
+    final pcmBytes  = _decodeOpusFrames(opusBytes);
 
-    // Decode length-prefixed Opus frames → interleaved PCM16 samples
-    final pcmBytes = _decodeOpusFrames(opusBytes);
-
-    // Derive a DateTime from the device-side Unix timestamp
     final startTime = DateTime.fromMillisecondsSinceEpoch(
       incoming.timestamp * 1000,
       isUtc: true,
@@ -298,18 +291,18 @@ class ChunkUploadService {
     );
 
     final chunk = AudioChunk(
-      id:             chunkId,
-      startTime:      startTime,
-      filePath:       filePath,
-      codec:          BleAudioCodec.opusFS320,
-      sampleRate:     incoming.sampleRate,
+      id:              chunkId,
+      startTime:       startTime,
+      filePath:        filePath,
+      codec:           BleAudioCodec.opusFS320,
+      sampleRate:      incoming.sampleRate,
       silenceAnalysis: analysis,
-      isComplete:     true,
+      isComplete:      true,
     );
 
     _completedChunks.add(chunk);
 
-    // ACK the device so it can free the flash storage
+    // ACK the device so it can free the SD card storage
     await _sendAck(incoming.timestamp);
 
     _progressController.add(UploadProgress(
@@ -321,7 +314,7 @@ class ChunkUploadService {
         '(speech=${analysis.totalSpeech.inSeconds}s)');
   }
 
-  // ─── Upload done ──────────────────────────────────────────────────────────────
+  // ─── Upload done ──────────────────────────────────────────────────────────
 
   void _handleUploadDone() {
     debugPrint('ChunkUploadService: upload done — '
@@ -336,17 +329,28 @@ class ChunkUploadService {
     _processConversations();
   }
 
-  // ─── Post-processing: group + stitch ─────────────────────────────────────────
+  // ─── Post-processing: group + stitch ─────────────────────────────────────
+  //
+  // Only groups confirmed closed by a trailing silence boundary are stitched.
+  // The remaining "open tail" — chunks after the last boundary — is saved to
+  // disk and prepended to the next upload session before processing, so a
+  // conversation that spans two sessions is assembled as a single file.
 
   Future<void> _processConversations() async {
-    if (_completedChunks.isEmpty) return;
+    // Prepend the persisted tail from the previous session so that
+    // cross-session conversations are treated as one continuous stream.
+    final allChunks = [..._pendingTailChunks, ..._completedChunks];
 
-    // Walk the chunks chronologically, splitting on silence boundaries.
-    final List<List<AudioChunk>> groups = [];
+    if (allChunks.isEmpty) {
+      await _savePendingTail([]);
+      return;
+    }
+
+    final List<List<AudioChunk>> closedGroups = [];
     List<AudioChunk> currentGroup = [];
     final List<SilenceAnalysisResult> recentAnalyses = [];
 
-    for (final chunk in _completedChunks) {
+    for (final chunk in allChunks) {
       currentGroup.add(chunk);
 
       if (chunk.silenceAnalysis != null) {
@@ -354,21 +358,27 @@ class ChunkUploadService {
       }
 
       final isBoundary = _silenceService.isConversationBoundary(
-        recentChunks:    recentAnalyses,
+        recentChunks:     recentAnalyses,
         silenceThreshold: conversationGapThreshold,
       );
 
       if (isBoundary) {
-        groups.add(List.from(currentGroup));
+        closedGroups.add(List.from(currentGroup));
         currentGroup = [];
         recentAnalyses.clear();
       }
     }
 
-    if (currentGroup.isNotEmpty) groups.add(currentGroup);
+    // currentGroup is the open tail: the conversation hasn't ended yet.
+    // Persist it so the next upload session can prepend it before stitching.
+    await _savePendingTail(currentGroup);
+    _pendingTailChunks = [];
 
-    // Stitch each group into a single WAV
-    for (final group in groups) {
+    debugPrint('ChunkUploadService: ${closedGroups.length} closed group(s), '
+        '${currentGroup.length} chunk(s) deferred to next session');
+
+    // Stitch only the confirmed-closed groups.
+    for (final group in closedGroups) {
       final speechChunks = group.where((c) => c.hasSpeech).toList();
       if (speechChunks.isEmpty) continue;
 
@@ -397,7 +407,106 @@ class ChunkUploadService {
     }
   }
 
-  // ─── Helpers ─────────────────────────────────────────────────────────────────
+  // ─── Pending tail persistence ─────────────────────────────────────────────
+
+  Future<String> get _pendingTailPath async {
+    final dir = await getApplicationDocumentsDirectory();
+    return '${dir.path}/audio_chunks/_pending_tail.json';
+  }
+
+  /// Load the open tail saved by the previous session.
+  /// Re-runs silence analysis on each WAV file so the data is ready for
+  /// boundary detection without re-decoding Opus.
+  Future<void> _loadPendingTail() async {
+    _pendingTailChunks = [];
+    try {
+      final file = File(await _pendingTailPath);
+      if (!await file.exists()) return;
+
+      final entries = jsonDecode(await file.readAsString()) as List<dynamic>;
+
+      for (final raw in entries) {
+        final entry    = raw as Map<String, dynamic>;
+        final filePath = entry['filePath'] as String;
+
+        // Re-analyse the saved WAV to reconstruct silenceAnalysis.
+        final analysis = await _analyzeWavFile(filePath);
+        if (analysis == null) continue; // file deleted / corrupt — skip
+
+        _pendingTailChunks.add(AudioChunk(
+          id:              entry['id'] as String,
+          startTime:       DateTime.parse(entry['startTime'] as String).toLocal(),
+          filePath:        filePath,
+          codec:           mapNameToCodec(entry['codec'] as String),
+          sampleRate:      entry['sampleRate'] as int,
+          silenceAnalysis: analysis,
+          isComplete:      true,
+        ));
+      }
+
+      debugPrint('ChunkUploadService: '
+          'loaded ${_pendingTailChunks.length} pending tail chunk(s)');
+    } catch (e) {
+      debugPrint('ChunkUploadService: failed to load pending tail: $e');
+      _pendingTailChunks = [];
+    }
+  }
+
+  /// Persist the open tail so the next session can continue where this left off.
+  /// Passing an empty list deletes any previously saved tail.
+  Future<void> _savePendingTail(List<AudioChunk> chunks) async {
+    try {
+      final file = File(await _pendingTailPath);
+
+      if (chunks.isEmpty) {
+        if (await file.exists()) await file.delete();
+        return;
+      }
+
+      final json = chunks.map((c) => {
+        'id':        c.id,
+        'startTime': c.startTime.toUtc().toIso8601String(),
+        'filePath':  c.filePath,
+        'codec':     mapCodecToName(c.codec),
+        'sampleRate': c.sampleRate,
+      }).toList();
+
+      // Ensure the directory exists before writing.
+      await file.parent.create(recursive: true);
+      await file.writeAsString(jsonEncode(json));
+
+      debugPrint('ChunkUploadService: '
+          'saved ${chunks.length} chunk(s) as pending tail');
+    } catch (e) {
+      debugPrint('ChunkUploadService: failed to save pending tail: $e');
+    }
+  }
+
+  /// Read a WAV file from disk and run silence analysis on its PCM payload.
+  /// Returns null if the file is missing, too short, or unreadable.
+  Future<SilenceAnalysisResult?> _analyzeWavFile(String filePath) async {
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) return null;
+
+      final bytes = await file.readAsBytes();
+      if (bytes.length <= _kWavHeaderSize) return null;
+
+      // Strip the 44-byte WAV header to get raw PCM16 samples.
+      final pcmBytes = Uint8List.sublistView(bytes, _kWavHeaderSize);
+
+      return _silenceService.analyze(
+        pcmBytes:           pcmBytes,
+        format:             PcmFormat.pcm16bit,
+        silenceThresholdDb: silenceThresholdDb,
+      );
+    } catch (e) {
+      debugPrint('ChunkUploadService: WAV analysis error for $filePath: $e');
+      return null;
+    }
+  }
+
+  // ─── Helpers ─────────────────────────────────────────────────────────────
 
   Future<void> _initOpus() async {
     if (_opusReady) return;
@@ -413,9 +522,8 @@ class ChunkUploadService {
   /// Decode a buffer of length-prefixed Opus frames into raw PCM16 bytes.
   ///
   /// Storage format: [2-byte LE frame_len][frame bytes] repeated.
-  /// Each frame is decoded individually by the Opus decoder.
   Uint8List _decodeOpusFrames(Uint8List opusData) {
-    if (_opusDecoder == null) return opusData; // fallback: return raw bytes
+    if (_opusDecoder == null) return opusData;
 
     final pcm = BytesBuilder();
     int offset = 0;
@@ -427,8 +535,8 @@ class ChunkUploadService {
       if (frameLen == 0 || offset + frameLen > opusData.length) break;
 
       try {
-        final frame    = opusData.sublist(offset, offset + frameLen);
-        final decoded  = _opusDecoder!.decode(input: frame);
+        final frame   = opusData.sublist(offset, offset + frameLen);
+        final decoded = _opusDecoder!.decode(input: frame);
         pcm.add(decoded.buffer.asUint8List());
       } catch (e) {
         debugPrint('ChunkUploadService: frame decode error at offset $offset: $e');
@@ -482,25 +590,22 @@ class ChunkUploadService {
     final blockAlign     = channels * bytesPerSample;
     final hdr            = ByteData(44);
 
-    // RIFF chunk descriptor
     hdr.setUint8(0, 0x52); hdr.setUint8(1, 0x49); // 'R','I'
     hdr.setUint8(2, 0x46); hdr.setUint8(3, 0x46); // 'F','F'
     hdr.setUint32(4, dataSize + 36, Endian.little);
     hdr.setUint8(8, 0x57); hdr.setUint8(9, 0x41);  // 'W','A'
     hdr.setUint8(10, 0x56); hdr.setUint8(11, 0x45); // 'V','E'
 
-    // fmt sub-chunk
     hdr.setUint8(12, 0x66); hdr.setUint8(13, 0x6D); // 'f','m'
     hdr.setUint8(14, 0x74); hdr.setUint8(15, 0x20); // 't',' '
-    hdr.setUint32(16, 16,          Endian.little); // PCM fmt size
-    hdr.setUint16(20, 1,           Endian.little); // PCM format
+    hdr.setUint32(16, 16,          Endian.little);
+    hdr.setUint16(20, 1,           Endian.little);
     hdr.setUint16(22, channels,    Endian.little);
     hdr.setUint32(24, sampleRate,  Endian.little);
     hdr.setUint32(28, byteRate,    Endian.little);
     hdr.setUint16(32, blockAlign,  Endian.little);
     hdr.setUint16(34, bitDepth,    Endian.little);
 
-    // data sub-chunk
     hdr.setUint8(36, 0x64); hdr.setUint8(37, 0x61); // 'd','a'
     hdr.setUint8(38, 0x74); hdr.setUint8(39, 0x61); // 't','a'
     hdr.setUint32(40, dataSize, Endian.little);

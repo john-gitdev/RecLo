@@ -167,9 +167,17 @@ class RecLoProvider extends ChangeNotifier {
       }
 
       await _startBatteryMonitor();
-      await _startChunkUpload(transport);
 
+      // Mark connected before attempting upload — the device is connected
+      // regardless of whether the RecLo transfer service is present.
       _setConnectionState(RecLoConnectionState.connected);
+
+      try {
+        await _startChunkUpload(transport);
+      } catch (e) {
+        debugPrint('RecLoProvider: Chunk upload start failed: $e');
+      }
+
       return true;
     } catch (e) {
       debugPrint('RecLoProvider: Connection failed: $e');

@@ -111,6 +111,13 @@ static void on_codec_output(uint8_t *data, size_t len)
         return;
     }
 
+    /* Guard: a single frame larger than the buffer can never be buffered */
+    if (2 + len > RECLO_STREAM_BUF_SIZE) {
+        LOG_WRN("Frame too large for write buffer (%zu bytes); dropping", len);
+        k_mutex_unlock(&_mutex);
+        return;
+    }
+
     /* Flush buffer to SD before it would overflow */
     if (_write_buf_len + 2 + len > RECLO_STREAM_BUF_SIZE) {
         fs_write(&_active_file, _write_buf, _write_buf_len);

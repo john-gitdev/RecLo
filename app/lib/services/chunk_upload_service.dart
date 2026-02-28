@@ -301,7 +301,7 @@ class ChunkUploadService {
       id:             chunkId,
       startTime:      startTime,
       filePath:       filePath,
-      codec:          BleAudioCodec.opus,
+      codec:          BleAudioCodec.opusFS320,
       sampleRate:     incoming.sampleRate,
       silenceAnalysis: analysis,
       isComplete:     true,

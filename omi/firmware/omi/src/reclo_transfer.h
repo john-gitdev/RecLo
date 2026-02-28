@@ -34,7 +34,7 @@
  *
  * CHUNK_HEADER payload (13 bytes):
  *   [0..3]   data_size    — total Opus data bytes for this chunk (uint32)
- *   [4]      codec_id     — 20 = Opus
+ *   [4]      codec_id     — 21 = Opus (matches Omi consumer CODEC_ID)
  *   [5..8]   sample_rate  — 16000 (uint32)
  *   [9..12]  crc32        — CRC-32/ISO-HDLC of the Opus data bytes (uint32)
  *

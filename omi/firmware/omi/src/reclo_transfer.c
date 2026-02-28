@@ -182,7 +182,7 @@ int reclo_transfer_store_chunk(uint32_t ts, const uint8_t *data, size_t len)
     uint32_t ts_le = ts;
     memcpy(&hdr[4], &ts_le, 4);
 
-    hdr[8] = 20;  /* CODEC_ID Opus */
+    hdr[8] = 21;  /* CODEC_ID — matches Omi consumer firmware CODEC_ID */
 
     uint32_t sr = 16000U;
     memcpy(&hdr[9], &sr, 4);

@@ -6,7 +6,6 @@
 #include <string.h>
 
 #include "lib/core/codec.h"
-#include "lib/core/config.h"
 #include "rtc.h"
 
 LOG_MODULE_REGISTER(reclo_recorder, LOG_LEVEL_INF);

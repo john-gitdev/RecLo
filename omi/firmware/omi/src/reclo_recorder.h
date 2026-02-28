@@ -17,8 +17,11 @@
  *   reclo_recorder_stop()   — flushes partial chunk, clears callback
  */
 
+/* Omi consumer codec: 320 samples/frame (20ms), 32kbps VBR Opus, CODEC_ID=21
+ * 15s / 0.02s = 750 frames; avg ~60KB Opus + 1.5KB length prefixes = ~62KB
+ * 65000 gives ~5% headroom over typical VBR output.                         */
 #define RECLO_CHUNK_DURATION_S  15
-#define RECLO_CHUNK_MAX_BYTES   75000   /* ~65KB Opus @ 32kbps for 15s */
+#define RECLO_CHUNK_MAX_BYTES   65000
 
 int  reclo_recorder_init(void);
 void reclo_recorder_start(void);

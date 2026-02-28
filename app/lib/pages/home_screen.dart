@@ -305,7 +305,7 @@ class _EmptyState extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             isConnected
-                ? 'Recordings will sync automatically on connect'
+                ? 'Recordings sync automatically when nearby'
                 : isScanning
                     ? 'Make sure your RecLo is nearby'
                     : 'Tap the status chip to scan',

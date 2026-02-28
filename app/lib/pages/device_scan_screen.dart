@@ -110,7 +110,7 @@ class _DeviceScanScreenState extends State<DeviceScanScreen> {
           style: TextStyle(color: Colors.white, fontFamily: 'SF Pro Display'),
         ),
         content: const Text(
-          'Please enable Bluetooth to scan for your Omi device.',
+          'Please enable Bluetooth to scan for your RecLo device.',
           style: TextStyle(color: Colors.white54, fontFamily: 'SF Pro Display'),
         ),
         actions: [
@@ -200,7 +200,7 @@ class _DeviceScanScreenState extends State<DeviceScanScreen> {
           ),
           const SizedBox(height: 6),
           const Text(
-            'Make sure your Omi is charged and nearby',
+            'Make sure your RecLo is charged and nearby',
             style: TextStyle(
               fontSize: 13,
               color: Colors.white24,
@@ -300,7 +300,7 @@ class _DeviceCard extends StatelessWidget {
 
   String get _name {
     final n = result.device.platformName;
-    return n.isNotEmpty ? n : 'Omi Device';
+    return n.isNotEmpty ? n : 'RecLo Device';
   }
 
   String get _shortId {

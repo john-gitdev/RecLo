@@ -29,7 +29,7 @@ class AudioChunk {
     this.isComplete = false,
   });
 
-  DateTime get endTime => startTime.add(const Duration(seconds: 15));
+  DateTime get endTime => startTime.add(const Duration(seconds: 30));
 
   bool get hasSpeech => silenceAnalysis != null && !silenceAnalysis!.isEntirelySilent;
 }

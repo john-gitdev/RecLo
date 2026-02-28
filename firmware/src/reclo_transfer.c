@@ -453,6 +453,32 @@ static void upload_thread_fn(void *a, void *b, void *c)
     }
 }
 
+/* ── BT connection callbacks (auto-registered) ───────────────────────────────*/
+
+static void _on_connected(struct bt_conn *conn, uint8_t err)
+{
+    if (err) return;
+    if (_conn) bt_conn_unref(_conn);
+    _conn = bt_conn_ref(conn);
+    LOG_INF("Transfer: device connected");
+}
+
+static void _on_disconnected(struct bt_conn *conn, uint8_t reason)
+{
+    _upload_active  = false;
+    _notify_enabled = false;
+    if (_conn) {
+        bt_conn_unref(_conn);
+        _conn = NULL;
+    }
+    LOG_INF("Transfer: device disconnected (reason %u)", reason);
+}
+
+BT_CONN_CB_DEFINE(reclo_conn_callbacks) = {
+    .connected    = _on_connected,
+    .disconnected = _on_disconnected,
+};
+
 /* ── Public API ──────────────────────────────────────────────────────────────*/
 
 int reclo_transfer_init(void)
@@ -471,22 +497,4 @@ int reclo_transfer_init(void)
 
     LOG_INF("RecLo transfer service initialized");
     return 0;
-}
-
-void reclo_transfer_on_connected(struct bt_conn *conn)
-{
-    if (_conn) bt_conn_unref(_conn);
-    _conn = bt_conn_ref(conn);
-    LOG_INF("Transfer: device connected");
-}
-
-void reclo_transfer_on_disconnected(void)
-{
-    _upload_active  = false;
-    _notify_enabled = false;
-    if (_conn) {
-        bt_conn_unref(_conn);
-        _conn = NULL;
-    }
-    LOG_INF("Transfer: device disconnected");
 }

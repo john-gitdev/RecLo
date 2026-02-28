@@ -103,22 +103,11 @@ _Static_assert(sizeof(RecloPacket) == RECLO_PACKET_SIZE,
 
 /**
  * Initialize the transfer service.
- * Registers the GATT service and spawns the upload thread.
- * Must be called once before bt_enable().
+ * Spawns the upload thread. BT connection callbacks are registered
+ * automatically via BT_CONN_CB_DEFINE — no manual wiring needed.
+ * Must be called once during boot, before codec_start().
  */
 int reclo_transfer_init(void);
-
-/**
- * Call from the BLE connected callback.
- * Stores the connection handle used for notifications.
- */
-void reclo_transfer_on_connected(struct bt_conn *conn);
-
-/**
- * Call from the BLE disconnected callback.
- * Aborts any in-progress upload and releases the connection handle.
- */
-void reclo_transfer_on_disconnected(void);
 
 /**
  * Store a completed audio chunk to flash.

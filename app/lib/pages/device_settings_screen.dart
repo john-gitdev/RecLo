@@ -99,6 +99,7 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
   Widget build(BuildContext context) {
     final provider = context.watch<RecLoProvider>();
     final device = provider.connectedDevice;
+    final battery = provider.batteryLevel;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0A0A0A),
@@ -112,7 +113,7 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
                 children: [
                   const SizedBox(height: 8),
                   const _SectionLabel(label: 'Device Info'),
-                  _buildDeviceInfoCard(device),
+                  _buildDeviceInfoCard(device, battery),
                   const SizedBox(height: 8),
                   const _SectionLabel(label: 'Hardware'),
                   _buildHardwareCard(device),
@@ -161,7 +162,14 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
     );
   }
 
-  Widget _buildDeviceInfoCard(BtDevice? device) {
+  Widget _buildDeviceInfoCard(BtDevice? device, int battery) {
+    final batteryText = battery < 0 ? '—' : '$battery%';
+    final batteryColor = battery >= 60
+        ? const Color(0xFF4ADE80)
+        : battery >= 20
+            ? Colors.orange
+            : Colors.redAccent;
+
     return _Card(
       children: [
         _InfoRow(
@@ -174,6 +182,11 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
           value: device != null ? _shortId(device.id) : '—',
           copyValue: device?.id,
           copyable: true,
+        ),
+        _InfoRow(
+          label: 'Battery',
+          value: batteryText,
+          valueColor: battery >= 0 ? batteryColor : null,
           isLast: true,
         ),
       ],
@@ -327,6 +340,7 @@ class _InfoRow extends StatelessWidget {
   final String? copyValue;
   final bool copyable;
   final bool isLast;
+  final Color? valueColor;
 
   const _InfoRow({
     required this.label,
@@ -334,6 +348,7 @@ class _InfoRow extends StatelessWidget {
     this.copyValue,
     this.copyable = false,
     this.isLast = false,
+    this.valueColor,
   });
 
   @override
@@ -353,9 +368,9 @@ class _InfoRow extends StatelessWidget {
           const Spacer(),
           Text(
             value,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 14,
-              color: Colors.white,
+              color: valueColor ?? Colors.white,
               fontFamily: 'SF Pro Display',
               fontWeight: FontWeight.w500,
             ),

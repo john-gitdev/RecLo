@@ -279,12 +279,15 @@ class RecLoProvider extends ChangeNotifier {
 
   Future<void> updateSilenceThreshold(double db) async {
     _silenceThresholdDb = db;
+    _uploadService?.silenceThresholdDb = db;
     await RecLoSettings.setDbThreshold(db);
     notifyListeners();
   }
 
   Future<void> updateSilenceGap(double minutes) async {
     _silenceGapMinutes = minutes;
+    _uploadService?.conversationGapThreshold =
+        Duration(seconds: (minutes * 60).round());
     await RecLoSettings.setSilenceGapMinutes(minutes);
     notifyListeners();
   }

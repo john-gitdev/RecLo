@@ -100,8 +100,8 @@ class _IncomingChunk {
 /// sessions is assembled correctly rather than split into two files.
 class ChunkUploadService {
   final DeviceTransport _transport;
-  final double silenceThresholdDb;
-  final Duration conversationGapThreshold;
+  double silenceThresholdDb;
+  Duration conversationGapThreshold;
   final void Function(Conversation conversation)? onConversationReady;
 
   final _silenceService = SilenceDetectionService();

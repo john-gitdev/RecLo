@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:provider/provider.dart';
+import 'package:reclo/providers/reclo_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // needed by RecLoSettings
 
 class RecLoSettings {
   static const String _keyDbThreshold = 'silence_db_threshold';
@@ -62,12 +64,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _saveDb(double value) async {
     setState(() => _dbThreshold = value);
-    await RecLoSettings.setDbThreshold(value);
+    await context.read<RecLoProvider>().updateSilenceThreshold(value);
   }
 
   Future<void> _saveGap(double value) async {
     setState(() => _silenceGapMinutes = value);
-    await RecLoSettings.setSilenceGapMinutes(value);
+    await context.read<RecLoProvider>().updateSilenceGap(value);
   }
 
   @override

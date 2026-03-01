@@ -174,10 +174,6 @@ class _DeviceSettingsScreenState extends State<DeviceSettingsScreen> {
           value: device != null ? _shortId(device.id) : '—',
           copyValue: device?.id,
           copyable: true,
-        ),
-        _InfoRow(
-          label: 'Firmware',
-          value: device?.firmwareRevision ?? '—',
           isLast: true,
         ),
       ],

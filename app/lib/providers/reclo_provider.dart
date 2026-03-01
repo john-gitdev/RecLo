@@ -138,8 +138,9 @@ class RecLoProvider extends ChangeNotifier {
         },
       );
 
-      // Fetch full device info (firmware, hardware, etc.)
-      final info = await _deviceConnection!.getDeviceInfo();
+      // Device info was already fetched inside connect() via BtDevice.getDeviceInfo().
+      // Use _deviceConnection!.device which has the correct values (with fallbacks).
+      final d = _deviceConnection!.device;
       _connectedDevice = BtDevice(
         id: device.remoteId.str,
         name: device.platformName.isNotEmpty
@@ -147,10 +148,10 @@ class RecLoProvider extends ChangeNotifier {
             : 'RecLo Device',
         type: DeviceType.omi,
         rssi: 0,
-        firmwareRevision: info['firmwareRevision'],
-        hardwareRevision: info['hardwareRevision'],
-        modelNumber: info['modelNumber'],
-        manufacturerName: info['manufacturerName'],
+        firmwareRevision: d.firmwareRevision,
+        hardwareRevision: d.hardwareRevision,
+        modelNumber: d.modelNumber,
+        manufacturerName: d.manufacturerName,
       );
 
       // Remember this device for watchdog reconnect

@@ -198,6 +198,8 @@ int main(void)
         error_led_driver();
         return ret;
     }
+    led_off();
+    boot_led_sequence();
 
     // Suspend unused modules
     LOG_PRINTK("\n");
@@ -332,7 +334,7 @@ int main(void)
     if (ret) {
         LOG_ERR("Failed to start microphone: %d", ret);
         error_microphone();
-        return ret;
+        /* Non-fatal: continue to main loop so BLE / OTA DFU remain reachable */
     }
 #ifdef CONFIG_OMI_ENABLE_WIFI
     // Initialize wifi

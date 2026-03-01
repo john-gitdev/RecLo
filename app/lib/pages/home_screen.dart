@@ -40,8 +40,10 @@ class HomeScreen extends StatelessWidget {
               onScanPressed: onScanPressed,
               onSettingsPressed: onSettingsPressed,
             ),
+            if (isConnected)
+              _SyncPanel(uploadProgress: uploadProgress),
             Expanded(
-              child: conversations.isEmpty && uploadProgress == null
+              child: conversations.isEmpty
                   ? _EmptyState(
                       isConnected: isConnected,
                       isScanning: isScanning,
@@ -49,7 +51,6 @@ class HomeScreen extends StatelessWidget {
                     )
                   : _ConversationList(
                       conversations: conversations,
-                      uploadProgress: uploadProgress,
                       onConversationTapped: onConversationTapped,
                     ),
             ),
@@ -352,12 +353,10 @@ class _EmptyState extends StatelessWidget {
 
 class _ConversationList extends StatelessWidget {
   final List<Conversation> conversations;
-  final UploadProgress? uploadProgress;
   final void Function(Conversation) onConversationTapped;
 
   const _ConversationList({
     required this.conversations,
-    required this.uploadProgress,
     required this.onConversationTapped,
   });
 
@@ -366,23 +365,16 @@ class _ConversationList extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       children: [
-        if (uploadProgress != null && !uploadProgress!.isComplete) ...[
-          _SectionLabel(label: 'Syncing'),
-          _UploadProgressCard(progress: uploadProgress!),
-          const SizedBox(height: 8),
-        ],
-        if (conversations.isNotEmpty) ...[
-          _SectionLabel(label: 'Today'),
-          ...conversations.reversed.map(
-            (c) => Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: _ConversationCard(
-                conversation: c,
-                onTap: () => onConversationTapped(c),
-              ),
+        _SectionLabel(label: 'Today'),
+        ...conversations.reversed.map(
+          (c) => Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: _ConversationCard(
+              conversation: c,
+              onTap: () => onConversationTapped(c),
             ),
           ),
-        ],
+        ),
       ],
     );
   }
@@ -410,84 +402,104 @@ class _SectionLabel extends StatelessWidget {
   }
 }
 
-class _UploadProgressCard extends StatelessWidget {
-  final UploadProgress progress;
-  const _UploadProgressCard({required this.progress});
+class _SyncPanel extends StatelessWidget {
+  final UploadProgress? uploadProgress;
+  const _SyncPanel({required this.uploadProgress});
 
   @override
   Widget build(BuildContext context) {
-    final received = progress.chunksReceived;
-    final total    = progress.totalChunks;
-    final fraction = progress.fraction;
+    final progress = uploadProgress;
+    final total = progress?.totalChunks ?? 0;
+    final received = progress?.chunksReceived ?? 0;
+    final remaining = total - received;
+    final isComplete = progress?.isComplete ?? false;
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF111111),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white10),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF4ADE80).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(10),
+    final String statusText;
+    final String countText;
+    final bool showProgress;
+
+    if (progress == null || total == 0) {
+      statusText = 'Checking device';
+      countText = '';
+      showProgress = false;
+    } else if (isComplete) {
+      statusText = 'Up to date';
+      countText = '$total file${total == 1 ? '' : 's'} synced';
+      showProgress = false;
+    } else {
+      statusText = 'Syncing';
+      countText = '$remaining file${remaining == 1 ? '' : 's'} remaining';
+      showProgress = true;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFF111111),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white10),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  isComplete
+                      ? Icons.check_circle_outline_rounded
+                      : Icons.sync_rounded,
+                  color: isComplete
+                      ? const Color(0xFF4ADE80)
+                      : Colors.white38,
+                  size: 15,
                 ),
-                child: const Icon(
-                  Icons.cloud_download_outlined,
-                  color: Color(0xFF4ADE80),
-                  size: 20,
+                const SizedBox(width: 7),
+                Text(
+                  statusText,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: isComplete
+                        ? const Color(0xFF4ADE80)
+                        : Colors.white70,
+                    fontWeight: FontWeight.w500,
+                    fontFamily: 'SF Pro Display',
+                  ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Syncing recordings',
+                if (countText.isNotEmpty) ...[
+                  const SizedBox(width: 6),
+                  const Text('·',
                       style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.white,
-                        fontWeight: FontWeight.w500,
-                        fontFamily: 'SF Pro Display',
-                      ),
+                          color: Colors.white24,
+                          fontFamily: 'SF Pro Display')),
+                  const SizedBox(width: 6),
+                  Text(
+                    countText,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: Colors.white38,
+                      fontFamily: 'SF Pro Display',
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      total > 0
-                          ? '$received of $total chunk${total == 1 ? '' : 's'}'
-                          : 'Starting...',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Colors.white38,
-                        fontFamily: 'SF Pro Display',
-                      ),
-                    ),
-                  ],
+                  ),
+                ],
+              ],
+            ),
+            if (showProgress) ...[
+              const SizedBox(height: 10),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: total > 0 ? progress!.fraction : null,
+                  minHeight: 3,
+                  backgroundColor: Colors.white10,
+                  valueColor:
+                      const AlwaysStoppedAnimation(Color(0xFF4ADE80)),
                 ),
               ),
             ],
-          ),
-          if (total > 0) ...[
-            const SizedBox(height: 12),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: fraction,
-                minHeight: 3,
-                backgroundColor: Colors.white10,
-                valueColor: const AlwaysStoppedAnimation(Color(0xFF4ADE80)),
-              ),
-            ),
           ],
-        ],
+        ),
       ),
     );
   }
